@@ -628,26 +628,28 @@ class COCOMaskmAP(Trace):
                     "segmentation": mask_util.encode(np.array(seg[..., np.newaxis], order='F'))[0]
                 }
                 self.results.append(result)
+                # print("res",result)
+        # print("np.unique",np.unique(seg_preds))
         return data
 
     def on_epoch_end(self, data):
         mAP = 0.0
         if self.results:
-            with Suppressor():
-                coco_results = self.coco_gt.loadRes(self.results)
-                print(coco_results)
-                cocoEval = COCOeval(self.coco_gt, coco_results, 'segm')
-                cocoEval.evaluate()
-                cocoEval.accumulate()
-                cocoEval.summarize()
-                mAP = cocoEval.stats[0]
+            # with Suppressor():
+            coco_results = self.coco_gt.loadRes(self.results)
+            # print("hey",coco_results)
+            cocoEval = COCOeval(self.coco_gt, coco_results, 'segm')
+            cocoEval.evaluate()
+            cocoEval.accumulate()
+            cocoEval.summarize()
+            mAP = cocoEval.stats[0]
         data.write_with_log(self.outputs[0], mAP)
 
 def get_estimator(data_dir=None,
-                  epochs=2,
-                  batch_size_per_gpu=4,
+                  epochs=34,
+                  batch_size_per_gpu=8,
                   im_size=1024,
-                  model_dir=tempfile.mkdtemp(),
+                  model_dir=Path("./model_path"),
                   train_steps_per_epoch=None,
                   eval_steps_per_epoch=None):
     assert im_size % 32 == 0, "im_size must be a multiple of 32"
@@ -682,7 +684,7 @@ def get_estimator(data_dir=None,
             Batch(batch_size=batch_size, pad_value=0)
         ],
         num_process=8 * num_device)
-    init_lr = 1e-3# / 16 * batch_size
+    init_lr = 1e-2 / 16 * batch_size
     model = fe.build(model_fn=lambda: solov2(input_shape=(im_size, im_size, 3)),
                      optimizer_fn=lambda: tf.optimizers.SGD(learning_rate=init_lr, momentum=0.9))
     network = fe.Network(ops=[

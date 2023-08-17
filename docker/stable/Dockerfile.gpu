@@ -1,0 +1,53 @@
+FROM tensorflow/tensorflow:2.11.1-gpu
+
+# Resolves a "Release no longer has a Release file" error on apt-get update later
+RUN rm /etc/apt/sources.list.d/cuda.list
+
+# change python library to root owner
+# it fixes "container ID cannot be mapped to a host ID" issue that happens later while upgrading python packages
+RUN chown -R root:root /usr/local/lib/python*
+
+RUN apt-get update
+
+# OpenCV dependencies
+RUN apt-get install -y --no-install-recommends \
+    ffmpeg \
+    libglib2.0-0 \
+    libsm6 \
+    libxrender1 \
+    libxext6 \
+    git
+
+# Traceability requirement
+ENV DEBIAN_FRONTEND noninteractive
+RUN apt-get install -y \
+    graphviz \
+    texlive-latex-base \
+    texlive-latex-extra
+
+# Resolve an issue encountered when doing pip install -e
+ENV SETUPTOOLS_USE_DISTUTILS stdlib
+# upgrade essential packages
+RUN pip install --upgrade pip setuptools
+
+# nightly test related packages
+RUN pip install --no-cache-dir \
+    ipython \
+    ipykernel \
+    ipywidgets \
+    papermill \
+    traitlets==5.2.2.post1
+
+RUN pip install jupyter-client notebook
+
+RUN ipython kernel install --user --name nightly_build
+
+# GPU cleaning requirement
+RUN apt-get install -y lsof
+
+# backend dependencies
+RUN pip install torch==2.0.1+cu118 torchvision==0.15.2+cu118 torchaudio==2.0.2+cu118 -f https://download.pytorch.org/whl/cu118/torch_stable.html
+
+# install FastEstimator
+ARG InstallFE=True
+RUN if [ $InstallFE = "True" ]; then pip install fastestimator; fi

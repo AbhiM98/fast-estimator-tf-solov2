@@ -1,0 +1,145 @@
+def IMAGE_TAG = 'fenightly'
+
+pipeline {
+    agent {label 'master'}
+    options {
+        timeout(time: 7, unit: 'HOURS')
+    }
+    environment {
+        IMAGE_TAG = "${IMAGE_TAG}"
+        DOCKER_DATASET_PATH = '/root/fastestimator_data'
+        LOCAL_DATASET_PATH = '/home/ubuntu/fastestimator_data'
+        S3_DATASET_PATH = 's3://fastestimator-public/nightly_test'
+        BUILD_DATE = sh(script: "echo `date +%D`", returnStdout: true).trim()
+    }
+    stages {
+        stage('nightly_test') {
+            parallel {
+                stage('Multi-GPU') {
+                    agent {label 'nightly_gpu'}
+                    stages {
+                        stage('download dataset') {
+                            steps {
+                                sh 'aws s3 sync $S3_DATASET_PATH $LOCAL_DATASET_PATH --delete'
+                            }
+                        }
+                        stage('run_test') {
+                            steps {
+                                script {
+                                    def customImage = docker.build("${IMAGE_TAG}", \
+                                                                  '--no-cache - < docker/nightly/Dockerfile.gpu')
+                                        customImage.inside('-u root -v $LOCAL_DATASET_PATH:$DOCKER_DATASET_PATH \
+                                                        --gpus all --shm-size 50g') {
+                                            sh 'pip install coverage'
+                                            sh 'coverage run --source fastestimator -m unittest test.run_pr_test'
+                                            sh 'bash test/run_nightly_build.sh'
+                                        }
+                                }
+                            }
+                        }
+                    }
+                }
+                stage('Single-GPU') {
+                    agent {label 'nightly_single_gpu'}
+                    stages {
+                        stage('download dataset') {
+                            steps {
+                                sh 'aws s3 sync $S3_DATASET_PATH $LOCAL_DATASET_PATH --delete'
+                            }
+                        }
+                        stage('run_test') {
+                            steps {
+                                script {
+                                    def customImage = docker.build("${IMAGE_TAG}", \
+                                                                  '--no-cache - < docker/nightly/Dockerfile.gpu')
+                                        customImage.inside('-u root -v $LOCAL_DATASET_PATH:$DOCKER_DATASET_PATH \
+                                                        --gpus all --shm-size 50g') {
+                                            sh 'pip install coverage'
+                                            sh 'coverage run --source fastestimator -m unittest test.run_pr_test'
+                                            sh 'bash test/run_nightly_build.sh'
+                                        }
+                                }
+                            }
+                        }
+                    }
+                }
+                stage('CPU') {
+                    agent {label 'nightly_cpu'}
+                    stages {
+                        stage('download_dataset') {
+                            steps {
+                                sh 'aws s3 sync $S3_DATASET_PATH $LOCAL_DATASET_PATH --delete'
+                            }
+                        }
+                        stage('run_test') {
+                            steps {
+                                script {
+                                    def customImage = docker.build("${IMAGE_TAG}", \
+                                                                '--no-cache - < docker/nightly/Dockerfile.cpu')
+                                        customImage.inside('-u root -v $LOCAL_DATASET_PATH:$DOCKER_DATASET_PATH \
+                                                        --shm-size 50g') {
+                                            sh 'pip install coverage'
+                                            sh 'coverage run --source fastestimator -m unittest test.run_pr_test'
+                                            sh 'bash test/run_nightly_build.sh'
+                                        }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        stage('deploy_pypi') {
+            agent {label 'master'}
+            steps {
+                script {
+                    def customImage = docker.build("${IMAGE_TAG}", "--no-cache - < docker/nightly/Dockerfile.cpu")
+                        customImage.inside("-u root") {
+                            withCredentials([string(credentialsId: 'pypi_password', variable: 'PYPI_PWD')]) {
+                                sh '''#!/bin/bash
+                                    pip install -U keyring keyrings.alt
+                                    pip install --no-cache-dir twine
+                                    FASTESTIMATOR_IS_NIGHTLY=1 python setup.py sdist bdist_wheel
+                                    twine upload dist/* -u fastestimatordev -p ${PYPI_PWD}
+                                    rm -rf *
+                                '''
+                            }
+                        }
+                }
+            }
+        }
+        stage('deploy_dockerhub') {
+            agent {label 'master'}
+            steps {
+                withDockerRegistry(credentialsId: 'docker_hub_credentials', url:'') {
+                    sh '''#!/bin/bash
+                        docker build -t fastestimator/fastestimator:nightly-cpu --no-cache - < docker/nightly/Dockerfile.cpu
+                        docker push fastestimator/fastestimator:nightly-cpu
+                        docker build -t fastestimator/fastestimator:nightly-gpu --no-cache - < docker/nightly/Dockerfile.gpu
+                        docker push fastestimator/fastestimator:nightly-gpu
+                        rm -rf *
+                    '''
+                }
+            }
+        }
+    }
+    post {
+        always{
+            script{
+                sh '''
+                docker system prune -a --force
+                '''
+            }
+        }
+        success{
+          script{
+                slackSend(channel: "fastestimator", message: "Congrats! FastEstimator <$BUILD_URL|nightly-test> of $BUILD_DATE passed :)")
+            }
+        }
+        failure {
+            script{
+                slackSend(channel: "fastestimator", message: "Oh no! FastEstimator <$BUILD_URL|nightly-test> of $BUILD_DATE failed :(")
+            }
+        }
+    }
+}

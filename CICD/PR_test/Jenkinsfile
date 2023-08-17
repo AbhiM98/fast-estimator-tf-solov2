@@ -1,0 +1,88 @@
+// the original regex is [^a-zA-Z0-9\-_\.], but \ is a reserved character for Jenkinsfile and need \\ to escape \ first
+def IMAGE_TAG = "$BUILD_TAG".replaceAll("[^a-zA-Z0-9\\-_\\.]", "").toLowerCase()
+def customImage
+
+pipeline {
+    agent {label 'master'}
+    options {
+        timeout(time: 30, unit: 'MINUTES')
+    }
+    environment {
+        IMAGE_TAG = "$IMAGE_TAG"
+        CODACY_PROJECT_TOKEN = credentials('codacy_project_api')
+    }
+    stages {
+        stage('PR-test') {
+            steps {
+                script {
+                        customImage = docker.build("$IMAGE_TAG", "--no-cache --build-arg InstallFE=False - < docker/nightly/Dockerfile.cpu")
+                        customImage.inside('-u root') {
+                            sh 'pip install --no-cache-dir .'
+                            sh 'pip install coverage'
+                            sh 'coverage run --source fastestimator -m unittest test.run_pr_test'
+                            sh 'coverage html'
+                            sh 'coverage xml'
+                    }
+                }
+            }
+        }
+        stage('Host html') {
+            steps{
+                publishHTML (target :
+                    [allowMissing: true,
+                     alwaysLinkToLastBuild: true,
+                     keepAll: true,
+                     reportDir: 'htmlcov',
+                     reportFiles: 'index.html',
+                     reportName: 'Code Coverage Report',
+                     reportTitles: 'Code Coverage Report'])
+            }
+        }
+
+        stage('Update Codacy'){
+            steps{
+                script {
+                    if (!IMAGE_TAG.contains("-pr-") && IMAGE_TAG.contains("-master-")){
+                        sh 'curl https://coverage.codacy.com/get.sh -o get.sh'
+                        sh 'bash get.sh report -r coverage.xml'
+                    }
+                }
+            }
+        }
+        stage('Cleanup') {
+                steps {
+                    script {
+
+                        try {
+                            customImage.inside('-u root') {
+                                sh 'chmod -R 777 .'
+                                sh 'rm -rf *'
+                            }
+                        }
+                        finally {
+                            sh 'docker rmi "$IMAGE_TAG"'
+                            //To avoid throwing error when multiple pr are running in parallel
+                            try {
+                                def PR_IMAGE_ID = sh(script: 'docker images --filter "reference=*pr*" --format "{{.ID}}"', returnStdout: true).trim() as String
+                                if(PR_IMAGE_ID !=  "")
+                                {
+                                    sh 'docker rmi $(docker images --filter "reference=*pr*" -q)'
+                                }
+                            } catch (Exception e) {
+                                echo 'Exception occurred: ' + e.toString()
+                            }
+                        }
+                    }
+                }
+            }
+    }
+	post {
+        failure {
+            script{
+                if (!IMAGE_TAG.contains("-pr-")){
+                    slackSend(channel: "fastestimator", message: "Oh no! FastEstimator <$BUILD_URL|PR-test#$BUILD_NUMBER> failed :(")
+                }
+            }
+        }
+    }
+}

@@ -654,7 +654,7 @@ def get_estimator(data_dir=None,
                   eval_steps_per_epoch=None):
     assert im_size % 32 == 0, "im_size must be a multiple of 32"
     num_device = get_num_devices()
-    train_ds, val_ds = aws_dataloader("s3://cvdb-data/sandbox2/training_data/instance_segmentation/polygon-corn_leaf/SET-two-image-leaf-segmentation/20221123-150107-1024_1024/",download_data=False,val_split=False)#mscoco.load_data(root_dir=data_dir, load_masks=True)
+    train_ds, val_ds = aws_dataloader("s3://cvdb-data/sandbox2/training_data/instance_segmentation/polygon-corn_leaf/BATCH-Darwin-Leaf-Instance-Seg-11-30/20221202-144935-1024_1024/",download_data=False,val_split=False)#mscoco.load_data(root_dir=data_dir, load_masks=True)
     # print("t",train_ds)
     batch_size = num_device * batch_size_per_gpu
     pipeline = fe.Pipeline(
